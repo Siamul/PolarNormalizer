@@ -239,20 +239,16 @@ class PolarNormalization(object):
                     map_location = lambda storage, loc: storage))
         self.mask_model = self.mask_model.to(self.device)
         self.mask_model.eval()
-        self.circle_input_transform = Compose([
+        self.input_transform = Compose([
             ToTensor(),
             Normalize(mean=(0.5791223733793273,), std=(0.21176097694558188,))
-        ])
-        self.mask_input_transform = Compose([
-            ToTensor(),
-            Normalize(mean=(0.5,), std=(0.5,))
         ])
     
     def getMask(self, image):
         w,h = image.size
         image = cv2.resize(np.array(image), self.NET_INPUT_SIZE, cv2.INTER_LINEAR_EXACT)
 
-        mask_logit_t = self.mask_model(Variable(self.mask_input_transform(image).unsqueeze(0).to(self.device)))[0]
+        mask_logit_t = self.mask_model(Variable(self.input_transform(image).unsqueeze(0).to(self.device)))[0]
         mask_t = torch.where(torch.sigmoid(mask_logit_t) > 0.5, 255, 0)
         mask = mask_t.cpu().numpy()[0]
         mask = cv2.resize(mask, (w, h), interpolation=cv2.INTER_LINEAR_EXACT)
@@ -266,7 +262,7 @@ class PolarNormalization(object):
         w_mult = w/self.NET_INPUT_SIZE[0]
         h_mult = h/self.NET_INPUT_SIZE[1]
 
-        inp_xyr_t = self.circle_model(Variable(self.circle_input_transform(image).unsqueeze(0).to(self.device)))
+        inp_xyr_t = self.circle_model(Variable(self.input_transform(image).unsqueeze(0).to(self.device)))
 
         #Circle params
         inp_xyr = inp_xyr_t.tolist()[0]
