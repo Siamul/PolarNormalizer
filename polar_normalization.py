@@ -89,7 +89,7 @@ class Resize(nn.Module):
         return torch.nn.functional.interpolate(x, size=self.size, scale_factor=self.scale_factor, mode=self.mode, align_corners=self.align_corners, recompute_scale_factor=self.recompute_scale_factor, antialias=self.antialias)
         
 class NestedSharedAtrousResUNet(nn.Module):
-    def __init__(self, num_classes, num_channels, width=32, resolution=(240, 320)):
+    def __init__(self, num_classes, num_channels, width=64, resolution=(240, 320)):
         super().__init__()
         self.resolution = resolution
         nb_filter = [width, width*2, width*4, width*8, width*16]
@@ -145,38 +145,40 @@ class NestedSharedAtrousResUNet(nn.Module):
         return output
 
 class PolarNormalization(object):
-    def __init__(self, polar_height = 64, polar_width = 512, mask_net_path = './nestedsharedatrousresunet-217-0.027828-maskIoU-0.938739.pth', circle_net_path = './resnet34-1583-0.045002-maskIoU-0.93717.pth', device=torch.device('cuda')):
+    def __init__(self, polar_height = 64, polar_width = 512, mask_net_path = './nestedsharedatrousresunet-135-0.026591-maskIoU-0.942362.pth', circle_net_path = './resnet34-1583-0.045002-maskIoU-0.93717.pth', device='cpu'):
         self.polar_height = polar_height
         self.polar_width = polar_width
         self.circle_net_path = circle_net_path
         self.mask_net_path = mask_net_path
-        self.device = device
+        self.device = torch.device(device)
         self.NET_INPUT_SIZE = (320,240)
-        self.circle_model = models.resnet34()
-        self.circle_model.avgpool = conv(in_channels=512, out_n=6)
-        self.circle_model.fc = fclayer(out_n=6)
-        try:
-            self.circle_model.load_state_dict(torch.load(self.circle_net_path, map_location=self.device))
-        except AssertionError:
-                print("assertion error")
-                self.circle_model.load_state_dict(torch.load(self.circle_net_path,
-                    map_location = lambda storage, loc: storage))
-        self.circle_model = self.circle_model.to(self.device)
-        self.circle_model.eval()
-        self.mask_model = NestedSharedAtrousResUNet(1, 1, width=64, resolution=(self.NET_INPUT_SIZE[1], self.NET_INPUT_SIZE[0]))
-        try:
-            self.mask_model.load_state_dict(torch.load(self.mask_net_path, map_location=self.device))
-        except AssertionError:
-                print("assertion error")
-                self.mask_model.load_state_dict(torch.load(self.mask_net_path,
-                    map_location = lambda storage, loc: storage))
-        self.mask_model = self.mask_model.to(self.device)
-        self.mask_model.eval()
+        with torch.inference_mode():
+            self.circle_model = models.resnet34()
+            self.circle_model.avgpool = conv(in_channels=512, out_n=6)
+            self.circle_model.fc = fclayer(out_n=6)
+            try:
+                self.circle_model.load_state_dict(torch.load(self.circle_net_path, map_location=self.device))
+            except AssertionError:
+                    print("assertion error")
+                    self.circle_model.load_state_dict(torch.load(self.circle_net_path,
+                        map_location = lambda storage, loc: storage))
+            self.circle_model = self.circle_model.to(self.device)
+            self.circle_model.eval()
+            self.mask_model = NestedSharedAtrousResUNet(1, 1, width=64, resolution=(self.NET_INPUT_SIZE[1], self.NET_INPUT_SIZE[0]))
+            try:
+                self.mask_model.load_state_dict(torch.load(self.mask_net_path, map_location=self.device))
+            except AssertionError:
+                    print("assertion error")
+                    self.mask_model.load_state_dict(torch.load(self.mask_net_path,
+                        map_location = lambda storage, loc: storage))
+            self.mask_model = self.mask_model.to(self.device)
+            self.mask_model.eval()
         self.input_transform = Compose([
             ToTensor(),
             Normalize(mean=(0.5,), std=(0.5,))
         ])
     
+    @torch.inference_mode()
     def getMask(self, image):
         w,h = image.size
         image = cv2.resize(np.array(image), self.NET_INPUT_SIZE, cv2.INTER_CUBIC)
@@ -189,6 +191,7 @@ class PolarNormalization(object):
 
         return mask
 
+    @torch.inference_mode()
     def circApprox(self, image):
         w,h = image.size
 
@@ -208,6 +211,7 @@ class PolarNormalization(object):
 
         return np.array([pupil_x,pupil_y,pupil_r]), np.array([iris_x,iris_y,iris_r])
 
+    @torch.inference_mode()
     def grid_sample(self, input, grid, interp_mode='bilinear'):
 
         # grid: [-1, 1]
@@ -219,6 +223,7 @@ class PolarNormalization(object):
         newgrid = torch.stack([gridx, gridy], dim=-1)
         return torch.nn.functional.grid_sample(input, newgrid, mode=interp_mode, align_corners=False)
 
+    @torch.inference_mode()
     def visualize_image(self, image):
         mask = self.getMask(image)
         pupil_xyr, iris_xyr = self.circApprox(image)
@@ -244,6 +249,7 @@ class PolarNormalization(object):
         return imVis_pil
 
     # Rubbersheet model-based Cartesian-to-polar transformation using bilinear interpolation from torch grid sample
+    @torch.inference_mode()
     def cartToPol(self, image, pupil_xyr, iris_xyr, mask=None):
 
         if pupil_xyr is None or iris_xyr is None:
@@ -293,6 +299,7 @@ class PolarNormalization(object):
         else:
             return (image_polar[0][0].cpu().numpy()).astype(np.uint8), None
 
+    @torch.inference_mode()
     def convert_to_polar(self, image, mask=None): #PIL image as input
         pupil_xyr, iris_xyr = self.circApprox(image)
         image_polar, mask_polar = self.cartToPol(image, pupil_xyr, iris_xyr, mask)
