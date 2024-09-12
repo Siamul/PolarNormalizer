@@ -6,8 +6,8 @@ To visualize the results for a folder of iris images run:
 
 To create a CPU-only pytorch conda environment, run:
 
-    > conda env create -f environment.yml
+    conda env create -f environment.yml
     
-    Or, install requirements using pip:
+  Or, install requirements using pip:
     
-    > pip install -r requirements.txt
+    pip install -r requirements.txt
