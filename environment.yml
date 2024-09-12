@@ -1,0 +1,12 @@
+name: polar_norm
+channels:
+  - conda-forge
+  - nvidia
+  - pytorch
+dependencies:
+  - pytorch
+  - torchvision
+  - numpy
+  - opencv
+  - pillow
+  - tqdm

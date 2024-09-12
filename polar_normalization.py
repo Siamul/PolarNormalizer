@@ -1,12 +1,10 @@
 import numpy as np
 import cv2
-import scipy.signal
 import torch
 import torch.nn as nn
 from torch.autograd import Variable
 from torchvision.transforms import Compose, ToTensor, Normalize
 from PIL import Image
-from skimage import img_as_bool
 from math import pi
 import math
 from torchvision import models
