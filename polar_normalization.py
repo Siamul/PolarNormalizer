@@ -141,13 +141,108 @@ class NestedSharedAtrousResUNet(nn.Module):
         output = self.final(torch.cat([x0_1, x0_2, x0_3, x0_4], 1))
         
         return output
+    
+class SharedAtrousResBlockSwishGN(nn.Module):
+    def __init__(self, in_channels, middle_channels, out_channels, downsample=False, upsample=False, min_group_size=32):
+        super(SharedAtrousResBlockSwishGN,self).__init__()
+        
+        self.downsample = downsample
+        if downsample:
+            self.downsampler = Resize(scale_factor=0.5, mode='bilinear')
+        
+        self.upsample = upsample
+        if upsample:
+            self.upsampler = Resize(scale_factor=2.0, mode='bilinear')
+        
+        self.conv_shortcut  = nn.Conv2d(in_channels, out_channels, 1, stride=1, padding='same', bias=False)
+        
+        self.norm1 = nn.GroupNorm(num_groups=min(in_channels // 4, min_group_size), num_channels=in_channels, eps=1e-5)
+        self.conv1 = SharedAtrousConv2d(in_channels, middle_channels)
+        self.norm2 = nn.GroupNorm(num_groups=min(middle_channels // 4, min_group_size), num_channels=middle_channels, eps=1e-5)
+        self.conv2 = SharedAtrousConv2d(middle_channels, out_channels)
+        
+        self.act = nn.SiLU()
+        
+    def forward(self, x):
+        h = self.norm1(x)
+        h = self.act(h)
+        
+        if self.downsample:
+            x = self.downsampler(x)
+            h = self.downsampler(h)
+        elif self.upsample:
+            x = self.upsampler(x)
+            h = self.upsampler(h)
+        
+        h = self.conv1(h)
+        h = self.norm2(h)
+        h = self.act(h)
+        h = self.conv2(h)
+        
+        return h + self.conv_shortcut(x)
+
+class NestedSharedAtrousResUNetSwishGN(nn.Module):
+    def __init__(self, num_classes, num_channels, width=32, resolution=(240, 320)):
+        super().__init__()
+        self.resolution = resolution
+        nb_filter = [width, width*2, width*4, width*8, width*16]
+
+        self.up = Resize(scale_factor=2, mode='bilinear')
+
+        self.conv0_0 = SharedAtrousConv2d(num_channels, nb_filter[0])
+        self.conv1_0 = SharedAtrousResBlockSwishGN(nb_filter[0], nb_filter[1], nb_filter[1], downsample=True)
+        self.conv2_0 = SharedAtrousResBlockSwishGN(nb_filter[1], nb_filter[2], nb_filter[2], downsample=True)
+        self.conv3_0 = SharedAtrousResBlockSwishGN(nb_filter[2], nb_filter[3], nb_filter[3], downsample=True)
+        self.conv4_0 = SharedAtrousResBlockSwishGN(nb_filter[3], nb_filter[4], nb_filter[4], downsample=True)
+
+        self.conv0_1 = SharedAtrousResBlockSwishGN(nb_filter[0]+nb_filter[1], nb_filter[0], nb_filter[0])
+        self.conv1_1 = SharedAtrousResBlockSwishGN(nb_filter[1]+nb_filter[2], nb_filter[1], nb_filter[1])
+        self.conv2_1 = SharedAtrousResBlockSwishGN(nb_filter[2]+nb_filter[3], nb_filter[2], nb_filter[2])
+        self.conv3_1 = SharedAtrousResBlockSwishGN(nb_filter[3]+nb_filter[4], nb_filter[3], nb_filter[3])
+
+        self.conv0_2 = SharedAtrousResBlockSwishGN(nb_filter[0]*2+nb_filter[1], nb_filter[0], nb_filter[0])
+        self.conv1_2 = SharedAtrousResBlockSwishGN(nb_filter[1]*2+nb_filter[2], nb_filter[1], nb_filter[1])
+        self.conv2_2 = SharedAtrousResBlockSwishGN(nb_filter[2]*2+nb_filter[3], nb_filter[2], nb_filter[2])
+
+        self.conv0_3 = SharedAtrousResBlockSwishGN(nb_filter[0]*3+nb_filter[1], nb_filter[0], nb_filter[0])
+        self.conv1_3 = SharedAtrousResBlockSwishGN(nb_filter[1]*3+nb_filter[2], nb_filter[1], nb_filter[1])
+
+        self.conv0_4 = SharedAtrousResBlockSwishGN(nb_filter[0]*4+nb_filter[1], nb_filter[0], nb_filter[0])
+
+        self.final = nn.Conv2d(nb_filter[0]*5, num_classes, kernel_size=1)
+
+    def forward(self, input):
+        
+        x0_0 = self.conv0_0(input) #320x240
+        x1_0 = self.conv1_0(x0_0) #160x120
+        x0_1 = self.conv0_1(torch.cat([x0_0, self.up(x1_0)], 1))
+
+        x2_0 = self.conv2_0(x1_0) #80x60
+        x1_1 = self.conv1_1(torch.cat([x1_0, self.up(x2_0)], 1))
+        x0_2 = self.conv0_2(torch.cat([x0_0, x0_1, self.up(x1_1)], 1))
+
+        x3_0 = self.conv3_0(x2_0) #40x30
+        x2_1 = self.conv2_1(torch.cat([x2_0, self.up(x3_0)], 1))
+        x1_2 = self.conv1_2(torch.cat([x1_0, x1_1, self.up(x2_1)], 1))
+        x0_3 = self.conv0_3(torch.cat([x0_0, x0_1, x0_2, self.up(x1_2)], 1))
+
+        x4_0 = self.conv4_0(x3_0) #20x15
+        x3_1 = self.conv3_1(torch.cat([x3_0, self.up(x4_0)], 1))
+        x2_2 = self.conv2_2(torch.cat([x2_0, x2_1, self.up(x3_1)], 1))
+        x1_3 = self.conv1_3(torch.cat([x1_0, x1_1, x1_2, self.up(x2_2)], 1))
+        x0_4 = self.conv0_4(torch.cat([x0_0, x0_1, x0_2, x0_3, self.up(x1_3)], 1))
+        
+        output = self.final(torch.cat([x0_0, x0_1, x0_2, x0_3, x0_4], 1))
+        
+        return output
 
 class PolarNormalization(object):
-    def __init__(self, polar_height = 64, polar_width = 512, mask_net_path = './nestedsharedatrousresunet-135-0.026591-maskIoU-0.942362.pth', circle_net_path = './resnet34-1583-0.045002-maskIoU-0.93717.pth', device='cpu'):
+    def __init__(self, polar_height = 64, polar_width = 512, mask_net_path = './nestedsharedatrousresunet-135-0.026591-maskIoU-0.942362.pth', circle_net_path = './resnet34-1583-0.045002-maskIoU-0.93717.pth', eyelid_net_path='./nestedsharedatrousresunetswishgn-256-0.024513-maskIoU-0.968207-eyelid.pth', device='cpu'):
         self.polar_height = polar_height
         self.polar_width = polar_width
         self.circle_net_path = circle_net_path
         self.mask_net_path = mask_net_path
+        self.eyelid_net_path = eyelid_net_path
         self.device = torch.device(device)
         self.NET_INPUT_SIZE = (320,240)
         with torch.inference_mode():
@@ -171,23 +266,39 @@ class PolarNormalization(object):
                         map_location = lambda storage, loc: storage))
             self.mask_model = self.mask_model.to(self.device)
             self.mask_model.eval()
+            self.eyelid_model = NestedSharedAtrousResUNetSwishGN(1, 1, width=32, resolution=(self.NET_INPUT_SIZE[1], self.NET_INPUT_SIZE[0]))
+            try:
+                self.eyelid_model.load_state_dict(torch.load(self.eyelid_net_path, map_location=self.device))
+            except AssertionError:
+                print("assertion error")
+                self.eyelid_model.load_state_dict(torch.load(self.eyelid_net_path,
+                    map_location = lambda storage, loc: storage))
+            self.eyelid_model = self.eyelid_model.to(self.device)
+            self.eyelid_model.eval()
         self.input_transform = Compose([
             ToTensor(),
             Normalize(mean=(0.5,), std=(0.5,))
         ])
     
     @torch.inference_mode()
-    def getMask(self, image):
+    def getMask(self, image, model):
         w,h = image.size
         image = cv2.resize(np.array(image), self.NET_INPUT_SIZE, cv2.INTER_CUBIC)
 
-        mask_logit_t = self.mask_model(Variable(self.input_transform(image).unsqueeze(0).to(self.device)))[0]
+        mask_logit_t = model(Variable(self.input_transform(image).unsqueeze(0).to(self.device)))[0]
         mask_t = torch.where(torch.sigmoid(mask_logit_t) > 0.5, 255, 0)
         mask = mask_t.cpu().numpy()[0]
         mask = cv2.resize(mask, (w, h), interpolation=cv2.INTER_LINEAR_EXACT)
-        #print('Mask Shape: ', mask.shape)
 
         return mask
+
+    @torch.inference_mode()
+    def getIrisMask(self, image):
+        return self.getMask(image, self.mask_model)
+
+    @torch.inference_mode()
+    def getInsideEyelidMask(self, image):
+        return self.getMask(image, self.eyelid_model)
 
     @torch.inference_mode()
     def circApprox(self, image):
@@ -222,9 +333,7 @@ class PolarNormalization(object):
         return torch.nn.functional.grid_sample(input, newgrid, mode=interp_mode, align_corners=False)
 
     @torch.inference_mode()
-    def visualize_image(self, image):
-        mask = self.getMask(image)
-        pupil_xyr, iris_xyr = self.circApprox(image)
+    def visualize_image(self, image, mask, pupil_xyr, iris_xyr):
         imVis = np.stack((np.array(image),)*3, axis=-1)
         #print(imVis.shape)
         try:
