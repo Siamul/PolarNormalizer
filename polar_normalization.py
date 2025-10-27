@@ -141,7 +141,40 @@ class NestedSharedAtrousResUNet(nn.Module):
         output = self.final(torch.cat([x0_1, x0_2, x0_3, x0_4], 1))
         
         return output
-    
+
+class SharedAtrousConv2dNew(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, bias=True, padding='same'):
+        super().__init__()
+        self.weights = nn.Parameter(torch.rand(int(out_channels/2), in_channels, kernel_size, kernel_size))
+        self.stride = stride
+        self.kernel_size = kernel_size
+        self.padding = padding
+        nn.init.xavier_uniform_(self.weights)
+        if bias:
+            self.bias1 = nn.Parameter(torch.zeros(int(out_channels/2)))
+            self.bias2 = nn.Parameter(torch.zeros(int(out_channels/2)))
+        else:
+            self.bias1 = None
+            self.bias2 = None
+    def forward(self, x):
+        b, c, h, w = x.shape
+        
+        if self.padding == 'same':
+            pad_val1_h = int(((h - 1)*self.stride - h + self.kernel_size) / 2)
+            pad_val1_w = int(((w - 1)*self.stride - w + self.kernel_size) / 2)
+            pad_val2_h = int(((h - 1)*self.stride - h + 2 * self.kernel_size - 1) / 2)
+            pad_val2_w = int(((w - 1)*self.stride - w + 2 * self.kernel_size - 1) / 2)
+        elif self.padding == 'valid':
+            pad_val1_h = 0
+            pad_val1_w = 0
+            pad_val2_h = 0
+            pad_val2_w = 0
+        
+        x1 = nn.functional.conv2d(x, self.weights, stride=self.stride, padding=(pad_val1_h, pad_val1_w), bias=self.bias1)
+        x2 = nn.functional.conv2d(x, self.weights, stride=self.stride, padding=(pad_val2_h, pad_val2_w), dilation=2, bias=self.bias2)
+        x3 = torch.cat([x1, x2], 1)
+        return x3    
+
 class SharedAtrousResBlockSwishGN(nn.Module):
     def __init__(self, in_channels, middle_channels, out_channels, downsample=False, upsample=False, min_group_size=32):
         super(SharedAtrousResBlockSwishGN,self).__init__()
@@ -157,9 +190,9 @@ class SharedAtrousResBlockSwishGN(nn.Module):
         self.conv_shortcut  = nn.Conv2d(in_channels, out_channels, 1, stride=1, padding='same', bias=False)
         
         self.norm1 = nn.GroupNorm(num_groups=min(in_channels // 4, min_group_size), num_channels=in_channels, eps=1e-5)
-        self.conv1 = SharedAtrousConv2d(in_channels, middle_channels)
+        self.conv1 = SharedAtrousConv2dNew(in_channels, middle_channels)
         self.norm2 = nn.GroupNorm(num_groups=min(middle_channels // 4, min_group_size), num_channels=middle_channels, eps=1e-5)
-        self.conv2 = SharedAtrousConv2d(middle_channels, out_channels)
+        self.conv2 = SharedAtrousConv2dNew(middle_channels, out_channels)
         
         self.act = nn.SiLU()
         
@@ -187,7 +220,7 @@ class NestedSharedAtrousResUNetSwishGN(nn.Module):
         self.resolution = resolution
         nb_filter = [width, width*2, width*4, width*8, width*16]
 
-        self.up = Resize(scale_factor=2, mode='bilinear')
+        self.up = Resize(scale_factor=2.0, mode='bilinear')
 
         self.conv0_0 = SharedAtrousConv2d(num_channels, nb_filter[0])
         self.conv1_0 = SharedAtrousResBlockSwishGN(nb_filter[0], nb_filter[1], nb_filter[1], downsample=True)
@@ -195,21 +228,24 @@ class NestedSharedAtrousResUNetSwishGN(nn.Module):
         self.conv3_0 = SharedAtrousResBlockSwishGN(nb_filter[2], nb_filter[3], nb_filter[3], downsample=True)
         self.conv4_0 = SharedAtrousResBlockSwishGN(nb_filter[3], nb_filter[4], nb_filter[4], downsample=True)
 
-        self.conv0_1 = SharedAtrousResBlockSwishGN(nb_filter[0]+nb_filter[1], nb_filter[0], nb_filter[0])
-        self.conv1_1 = SharedAtrousResBlockSwishGN(nb_filter[1]+nb_filter[2], nb_filter[1], nb_filter[1])
-        self.conv2_1 = SharedAtrousResBlockSwishGN(nb_filter[2]+nb_filter[3], nb_filter[2], nb_filter[2])
-        self.conv3_1 = SharedAtrousResBlockSwishGN(nb_filter[3]+nb_filter[4], nb_filter[3], nb_filter[3])
+        self.conv0_1 = SharedAtrousResBlockSwishGN(nb_filter[0]+nb_filter[1], nb_filter[1], nb_filter[0])
+        self.conv1_1 = SharedAtrousResBlockSwishGN(nb_filter[1]+nb_filter[2], nb_filter[2], nb_filter[1])
+        self.conv2_1 = SharedAtrousResBlockSwishGN(nb_filter[2]+nb_filter[3], nb_filter[3], nb_filter[2])
+        self.conv3_1 = SharedAtrousResBlockSwishGN(nb_filter[3]+nb_filter[4], nb_filter[4], nb_filter[3])
 
-        self.conv0_2 = SharedAtrousResBlockSwishGN(nb_filter[0]*2+nb_filter[1], nb_filter[0], nb_filter[0])
-        self.conv1_2 = SharedAtrousResBlockSwishGN(nb_filter[1]*2+nb_filter[2], nb_filter[1], nb_filter[1])
-        self.conv2_2 = SharedAtrousResBlockSwishGN(nb_filter[2]*2+nb_filter[3], nb_filter[2], nb_filter[2])
+        self.conv0_2 = SharedAtrousResBlockSwishGN(nb_filter[0]*2+nb_filter[1], nb_filter[1], nb_filter[0])
+        self.conv1_2 = SharedAtrousResBlockSwishGN(nb_filter[1]*2+nb_filter[2], nb_filter[2], nb_filter[1])
+        self.conv2_2 = SharedAtrousResBlockSwishGN(nb_filter[2]*2+nb_filter[3], nb_filter[3], nb_filter[2])
 
-        self.conv0_3 = SharedAtrousResBlockSwishGN(nb_filter[0]*3+nb_filter[1], nb_filter[0], nb_filter[0])
-        self.conv1_3 = SharedAtrousResBlockSwishGN(nb_filter[1]*3+nb_filter[2], nb_filter[1], nb_filter[1])
+        self.conv0_3 = SharedAtrousResBlockSwishGN(nb_filter[0]*3+nb_filter[1], nb_filter[1], nb_filter[0])
+        self.conv1_3 = SharedAtrousResBlockSwishGN(nb_filter[1]*3+nb_filter[2], nb_filter[2], nb_filter[1])
 
-        self.conv0_4 = SharedAtrousResBlockSwishGN(nb_filter[0]*4+nb_filter[1], nb_filter[0], nb_filter[0])
+        self.conv0_4 = SharedAtrousResBlockSwishGN(nb_filter[0]*4+nb_filter[1], nb_filter[1], nb_filter[0])
 
-        self.final = nn.Conv2d(nb_filter[0]*5, num_classes, kernel_size=1)
+        self.final = nn.Sequential(
+            SharedAtrousResBlockSwishGN(nb_filter[0]*5, nb_filter[1], nb_filter[0]),
+            nn.Conv2d(nb_filter[0], num_classes, kernel_size=1)
+        )
 
     def forward(self, input):
         
@@ -237,7 +273,7 @@ class NestedSharedAtrousResUNetSwishGN(nn.Module):
         return output
 
 class PolarNormalization(object):
-    def __init__(self, polar_height = 64, polar_width = 512, mask_net_path = './nestedsharedatrousresunet-135-0.026591-maskIoU-0.942362.pth', circle_net_path = './resnet34-1583-0.045002-maskIoU-0.93717.pth', eyelid_net_path='./nestedsharedatrousresunetswishgn-256-0.024513-maskIoU-0.968207-eyelid.pth', device='cpu'):
+    def __init__(self, polar_height = 64, polar_width = 512, mask_net_path = './nestedsharedatrousresunet-135-0.026591-maskIoU-0.942362.pth', circle_net_path = './resnet34-1583-0.045002-maskIoU-0.93717.pth', eyelid_net_path='./nestedsharedatrousresunetswishgn-161-0.024934-maskIoU-0.968093-eyelid.pth', device='cpu'):
         self.polar_height = polar_height
         self.polar_width = polar_width
         self.circle_net_path = circle_net_path

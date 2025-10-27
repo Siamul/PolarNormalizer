@@ -47,7 +47,7 @@ if __name__ == '__main__':
                         help="path of the configuration file")
     parser.add_argument('--mask_net_path', default='./nestedsharedatrousresunet-135-0.026591-maskIoU-0.942362.pth')
     parser.add_argument('--circle_net_path', default='./resnet34-1583-0.045002-maskIoU-0.93717.pth')
-    parser.add_argument('--eyelid_net_path', default='./nestedsharedatrousresunetswishgn-256-0.024513-maskIoU-0.968207-eyelid.pth')
+    parser.add_argument('--eyelid_net_path', default='./nestedsharedatrousresunetswishgn-161-0.024934-maskIoU-0.968093-eyelid.pth')
     parser.add_argument('--image_dir', default='./test_gray_images')
     parser.add_argument('--vis_dir', default='./vis_dir')
     parser.add_argument('--insideeyelid_vis_dir', default='./insideyelid_vis_dir')
